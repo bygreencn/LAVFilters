@@ -22,14 +22,16 @@
 
 #define BD_READ_BUFFER_SIZE (6144 * 20)
 
-int BDByteStreamRead(void *opaque, uint8_t *buf, int buf_size)
+int CBDDemuxer::BDByteStreamRead(void *opaque, uint8_t *buf, int buf_size)
 {
-  return bd_read((BLURAY *)opaque, buf, buf_size);
+  CBDDemuxer *demux = (CBDDemuxer *)opaque;
+  return bd_read(demux->m_pBD, buf, buf_size);
 }
 
-int64_t BDByteStreamSeek(void *opaque,  int64_t offset, int whence)
+int64_t CBDDemuxer::BDByteStreamSeek(void *opaque,  int64_t offset, int whence)
 {
-  BLURAY *bd = (BLURAY *)opaque;
+  CBDDemuxer *demux = (CBDDemuxer *)opaque;
+  BLURAY *bd = demux->m_pBD;
 
   int64_t pos = 0;
   if (whence == SEEK_SET) {
@@ -105,6 +107,7 @@ CBDDemuxer::CBDDemuxer(CCritSec *pLock, ILAVFSettingsInternal *pSettings)
   , m_rtNewOffset(0)
   , m_bNewOffsetPos(0)
   , m_nTitleCount(0)
+  , m_EndOfStreamPacketFlushProtection(FALSE)
 {
 #ifdef DEBUG
   bd_set_debug_mask(DBG_FILE|DBG_BLURAY|DBG_DIR|DBG_NAV|DBG_CRIT);
@@ -256,9 +259,12 @@ void CBDDemuxer::ProcessBDEvents()
       int ret = bd_get_clip_infos(m_pBD, event.param, &clip_start, &clip_in, &bytepos, NULL);
       if (ret) {
         m_rtNewOffset = Convert90KhzToDSTime(clip_start - clip_in) + m_lavfDemuxer->GetStartTime();
-        m_bNewOffsetPos = bytepos;
+        m_bNewOffsetPos = bytepos-4;
         DbgLog((LOG_TRACE, 10, L"New clip! offset: %I64d bytepos: %I64u", m_rtNewOffset, bytepos));
       }
+      m_EndOfStreamPacketFlushProtection = FALSE;
+    } else if (event.event == BD_EVENT_END_OF_TITLE) {
+      m_EndOfStreamPacketFlushProtection = TRUE;
     }
   }
 }
@@ -280,6 +286,15 @@ STDMETHODIMP CBDDemuxer::GetNextPacket(Packet **ppPacket)
     //DbgLog((LOG_TRACE, 10, L"Frame: stream: %d, start: %I64d, corrected: %I64d, bytepos: %I64d", pPacket->StreamId, pPacket->rtStart, pPacket->rtStart + rtOffset, pPacket->bPosition));
     pPacket->rtStart += rtOffset;
     pPacket->rtStop += rtOffset;
+  }
+
+  if (hr == S_OK && m_EndOfStreamPacketFlushProtection && pPacket && pPacket->bPosition != -1) {
+    if (pPacket->bPosition < m_bNewOffsetPos) {
+      DbgLog((LOG_TRACE, 10, L"Dropping packet from a pervious segment (pos %I64d, segment started at %I64d) at EOS, from stream %d", pPacket->bPosition, m_bNewOffsetPos, pPacket->StreamId));
+      SAFE_DELETE(*ppPacket);
+      *ppPacket = NULL;
+      return S_FALSE;
+    }
   }
   return hr;
 }
@@ -308,7 +323,7 @@ STDMETHODIMP CBDDemuxer::SetTitle(int idx)
   }
 
   uint8_t *buffer = (uint8_t *)av_mallocz(BD_READ_BUFFER_SIZE + FF_INPUT_BUFFER_PADDING_SIZE);
-  m_pb = avio_alloc_context(buffer, BD_READ_BUFFER_SIZE, 0, m_pBD, BDByteStreamRead, NULL, BDByteStreamSeek);
+  m_pb = avio_alloc_context(buffer, BD_READ_BUFFER_SIZE, 0, this, BDByteStreamRead, NULL, BDByteStreamSeek);
 
   SafeRelease(&m_lavfDemuxer);
   SAFE_CO_FREE(m_rtOffset);
@@ -435,6 +450,7 @@ STDMETHODIMP CBDDemuxer::Seek(REFERENCE_TIME rTime)
   int64_t prev = bd_tell(m_pBD);
 
   int64_t target = bd_find_seek_point(m_pBD, ConvertDSTimeTo90Khz(rTime));
+  m_EndOfStreamPacketFlushProtection = FALSE;
 
   DbgLog((LOG_TRACE, 1, "Seek Request: %I64u (time); %I64u (byte), %I64u (prev byte)", rTime, target, prev));
   return m_lavfDemuxer->SeekByte(target + 4, AVSEEK_FLAG_BACKWARD);

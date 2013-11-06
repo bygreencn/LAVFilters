@@ -76,6 +76,9 @@ private:
   void ProcessClipInfo(struct clpi_cl *clpi);
   void ProcessBDEvents();
 
+  static int BDByteStreamRead(void *opaque, uint8_t *buf, int buf_size);
+  static int64_t CBDDemuxer::BDByteStreamSeek(void *opaque,  int64_t offset, int whence);
+
 private:
   BLURAY *m_pBD;
   AVIOContext *m_pb;
@@ -89,4 +92,6 @@ private:
   REFERENCE_TIME *m_rtOffset;
   REFERENCE_TIME m_rtNewOffset;
   int64_t       m_bNewOffsetPos;
+
+  BOOL m_EndOfStreamPacketFlushProtection;
 };
