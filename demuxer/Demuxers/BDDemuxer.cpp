@@ -265,6 +265,8 @@ void CBDDemuxer::ProcessBDEvents()
       m_EndOfStreamPacketFlushProtection = FALSE;
     } else if (event.event == BD_EVENT_END_OF_TITLE) {
       m_EndOfStreamPacketFlushProtection = TRUE;
+    } else if (event.event == BD_EVENT_SEEK) {
+      m_EndOfStreamPacketFlushProtection = FALSE;
     }
   }
 }
@@ -290,7 +292,7 @@ STDMETHODIMP CBDDemuxer::GetNextPacket(Packet **ppPacket)
 
   if (hr == S_OK && m_EndOfStreamPacketFlushProtection && pPacket && pPacket->bPosition != -1) {
     if (pPacket->bPosition < m_bNewOffsetPos) {
-      DbgLog((LOG_TRACE, 10, L"Dropping packet from a pervious segment (pos %I64d, segment started at %I64d) at EOS, from stream %d", pPacket->bPosition, m_bNewOffsetPos, pPacket->StreamId));
+      DbgLog((LOG_TRACE, 10, L"Dropping packet from a previous segment (pos %I64d, segment started at %I64d) at EOS, from stream %d", pPacket->bPosition, m_bNewOffsetPos, pPacket->StreamId));
       SAFE_DELETE(*ppPacket);
       *ppPacket = NULL;
       return S_FALSE;
@@ -337,6 +339,12 @@ STDMETHODIMP CBDDemuxer::SetTitle(int idx)
   }
 
   m_lavfDemuxer->SeekByte(0, 0);
+
+  // Process any events that occured during opening
+  ProcessBDEvents();
+
+  // Reset EOS protection
+  m_EndOfStreamPacketFlushProtection = FALSE;
 
   // space for storing stream offsets
   m_rtOffset = (REFERENCE_TIME *)CoTaskMemAlloc(sizeof(REFERENCE_TIME) * m_lavfDemuxer->GetNumStreams());
