@@ -329,7 +329,6 @@ CDecAvcodec::CDecAvcodec(void)
   , m_nBFramePos(0)
   , m_iInterlaced(-1)
   , m_CurrentThread(0)
-  , m_bDXVA(FALSE)
   , m_bInputPadded(FALSE)
 {
 }
@@ -405,9 +404,6 @@ STDMETHODIMP CDecAvcodec::InitDecoder(AVCodecID codec, const CMediaType *pmt)
   m_pAVCtx->workaround_bugs       = FF_BUG_AUTODETECT;
   m_pAVCtx->refcounted_frames     = 1;
 
-  if (codec == AV_CODEC_ID_H264)
-    m_pAVCtx->flags2             |= CODEC_FLAG2_SHOW_ALL;
-
   // Setup threading
   int thread_type = getThreadFlags(codec);
   if (thread_type) {
@@ -429,8 +425,6 @@ STDMETHODIMP CDecAvcodec::InitDecoder(AVCodecID codec, const CMediaType *pmt)
 
   m_pFrame = av_frame_alloc();
   CheckPointer(m_pFrame, E_POINTER);
-
-  m_h264RandomAccess.SetAVCNALSize(0);
 
   // Process Extradata
   BYTE *extra = NULL;
@@ -477,7 +471,6 @@ STDMETHODIMP CDecAvcodec::InitDecoder(AVCodecID codec, const CMediaType *pmt)
       extra[extralen-1] = 0;
 
       bH264avc = TRUE;
-      m_h264RandomAccess.SetAVCNALSize(mp2vi->dwFlags);
     } else if (pmt->subtype == MEDIASUBTYPE_LAV_RAWVIDEO) {
       if (extralen < sizeof(m_pAVCtx->pix_fmt)) {
         DbgLog((LOG_TRACE, 10, L"-> LAV RAW Video extradata is missing.."));
@@ -512,7 +505,6 @@ STDMETHODIMP CDecAvcodec::InitDecoder(AVCodecID codec, const CMediaType *pmt)
     }
   }
 
-  m_h264RandomAccess.flush(m_pAVCtx->thread_count);
   m_CurrentThread = 0;
   m_rtStartCache = AV_NOPTS_VALUE;
 
@@ -661,6 +653,7 @@ STDMETHODIMP CDecAvcodec::DestroyDecoder()
 
   if (m_pAVCtx) {
     avcodec_close(m_pAVCtx);
+    av_freep(&m_pAVCtx->hwaccel_context);
     av_freep(&m_pAVCtx->extradata);
     av_freep(&m_pAVCtx);
   }
@@ -733,12 +726,7 @@ STDMETHODIMP CDecAvcodec::Decode(const BYTE *buffer, int buflen, REFERENCE_TIME 
       pDataBuffer = (uint8_t *)buffer;
     }
 
-    if (m_nCodecId == AV_CODEC_ID_H264) {
-      BOOL bRecovered = m_h264RandomAccess.searchRecoveryPoint(pDataBuffer, buflen);
-      if (!bRecovered) {
-        return S_OK;
-      }
-    } else if (m_nCodecId == AV_CODEC_ID_VP8 && m_bWaitingForKeyFrame) {
+    if (m_nCodecId == AV_CODEC_ID_VP8 && m_bWaitingForKeyFrame) {
       if (!(pDataBuffer[0] & 1)) {
         DbgLog((LOG_TRACE, 10, L"::Decode(): Found VP8 key-frame, resuming decoding"));
         m_bWaitingForKeyFrame = FALSE;
@@ -871,12 +859,8 @@ STDMETHODIMP CDecAvcodec::Decode(const BYTE *buffer, int buflen, REFERENCE_TIME 
     }
 
     // Judge frame usability
-    // This determines if a frame is artifact free and can be delivered
-    // For H264 this does some wicked magic hidden away in the H264RandomAccess class
-    // MPEG-2 and VC-1 just wait for a keyframe..
-    if (m_nCodecId == AV_CODEC_ID_H264 && (bParserFrame || !m_pParser || got_picture)) {
-      m_h264RandomAccess.judgeFrameUsability(m_pFrame, &got_picture);
-    } else if (m_bResumeAtKeyFrame) {
+    // This determines if a frame is artifact free and can be delivered.
+    if (m_bResumeAtKeyFrame) {
       if (m_bWaitingForKeyFrame && got_picture) {
         if (m_pFrame->key_frame) {
           DbgLog((LOG_TRACE, 50, L"::Decode() - Found Key-Frame, resuming decoding at %I64d", m_pFrame->pkt_pts));
@@ -1019,14 +1003,13 @@ STDMETHODIMP CDecAvcodec::Flush()
   m_CurrentThread = 0;
   m_rtStartCache = AV_NOPTS_VALUE;
   m_bWaitingForKeyFrame = TRUE;
-  m_h264RandomAccess.flush(m_pAVCtx->thread_count);
 
   m_nBFramePos = 0;
   m_tcBFrameDelay[0].rtStart = m_tcBFrameDelay[0].rtStop = AV_NOPTS_VALUE;
   m_tcBFrameDelay[1].rtStart = m_tcBFrameDelay[1].rtStop = AV_NOPTS_VALUE;
 
-  if (!m_bDXVA && !(m_pCallback->GetDecodeFlags() & LAV_VIDEO_DEC_FLAG_DVD) && (m_nCodecId == AV_CODEC_ID_H264 || m_nCodecId == AV_CODEC_ID_MPEG2VIDEO)) {
-    InitDecoder(m_nCodecId, &m_pCallback->GetInputMediaType());
+  if (!(m_pCallback->GetDecodeFlags() & LAV_VIDEO_DEC_FLAG_DVD) && (m_nCodecId == AV_CODEC_ID_H264 || m_nCodecId == AV_CODEC_ID_MPEG2VIDEO)) {
+    CDecAvcodec::InitDecoder(m_nCodecId, &m_pCallback->GetInputMediaType());
   }
 
   return __super::Flush();

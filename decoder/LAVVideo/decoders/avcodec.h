@@ -20,7 +20,6 @@
 #pragma once
 
 #include "DecBase.h"
-#include "H264RandomAccess.h"
 
 #include <map>
 
@@ -65,7 +64,6 @@ protected:
   AVCodecContext       *m_pAVCtx;
   AVFrame              *m_pFrame;
   AVCodecID            m_nCodecId;
-  BOOL                 m_bDXVA;
 
 private:
   AVCodec              *m_pAVCodec;
@@ -77,8 +75,6 @@ private:
   int                  m_nFFBufferSize2;
 
   SwsContext           *m_pSwsContext;
-
-  CH264RandomAccess    m_h264RandomAccess;
 
   BOOL                 m_bNoBufferConsumption;
   BOOL                 m_bHasPalette;
