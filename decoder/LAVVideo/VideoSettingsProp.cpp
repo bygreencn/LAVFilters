@@ -235,7 +235,7 @@ HRESULT CLAVVideoSettingsProp::OnActivate()
   addHint(IDC_HWDEINT_OUT_FILM, L"Deinterlace in \"Film\" Mode.\nFor every pair of interlaced fields, one frame will be created, resulting in 25/30 fps.");
   addHint(IDC_HWDEINT_OUT_VIDEO, L"Deinterlace in \"Video\" Mode. (Recommended)\nFor every interlaced field, one frame will be created, resulting in 50/60 fps.");
 
-  addHint(IDC_HWDEINT_HQ, L"Instruct the decoder to use the maximum quality possible.\nThis will cost performance, it is however required for the best deinterlacing quality.\n\nNOTE: This option has no effect on Windows XP.");
+  addHint(IDC_HWDEINT_HQ, L"Instruct the decoder to use the maximum quality possible.\nThis will cost performance, it is however required for the best deinterlacing quality.");
 
   addHint(IDC_DITHER_ORDERED, L"Ordered Dithering uses a static pattern, resulting in very smooth and regular pattern. However, in some cases the regular pattern can be visible and distracting.");
   addHint(IDC_DITHER_RANDOM, L"Random Dithering uses random noise to dither the video frames. This has the advantage of not creating any visible pattern, at the downside of increasing the noise floor slightly.");
@@ -287,7 +287,7 @@ HRESULT CLAVVideoSettingsProp::OnActivate()
     SendDlgItemMessage(m_Dlg, IDC_HWDEINT_OUT_FILM, BM_SETCHECK, (m_HWDeintOutMode == DeintOutput_FramePer2Field), 0);
     SendDlgItemMessage(m_Dlg, IDC_HWDEINT_OUT_VIDEO, BM_SETCHECK, (m_HWDeintOutMode == DeintOutput_FramePerField), 0);
 
-    SendDlgItemMessage(m_Dlg, IDC_HWDEINT_HQ, BM_SETCHECK, m_HWDeintHQ, 0);
+    SendDlgItemMessage(m_Dlg, IDC_HWDEINT_HQ, BM_SETCHECK, IsVistaOrNewer() ? m_HWDeintHQ : 0, 0);
 
     SendDlgItemMessage(m_Dlg, IDC_SWDEINT_ENABLE, BM_SETCHECK, m_SWDeint, 0);
     SendDlgItemMessage(m_Dlg, IDC_SWDEINT_OUT_FILM, BM_SETCHECK, (m_SWDeintOutMode == DeintOutput_FramePer2Field), 0);
@@ -334,7 +334,7 @@ HRESULT CLAVVideoSettingsProp::UpdateHWOptions()
   EnableWindow(GetDlgItem(m_Dlg, IDC_LBL_HWDEINT_MODE), bHWDeintEnabled);
   EnableWindow(GetDlgItem(m_Dlg, IDC_HWDEINT_OUT_FILM), bHWDeintEnabled);
   EnableWindow(GetDlgItem(m_Dlg, IDC_HWDEINT_OUT_VIDEO), bHWDeintEnabled);
-  EnableWindow(GetDlgItem(m_Dlg, IDC_HWDEINT_HQ), bCUDAOnly && bHWDeintEnabled);
+  EnableWindow(GetDlgItem(m_Dlg, IDC_HWDEINT_HQ), bCUDAOnly && bHWDeintEnabled && IsVistaOrNewer());
 
   WCHAR hwAccelEmpty[] = L"";
   WCHAR hwAccelUnavailable[] = L"Not available";
