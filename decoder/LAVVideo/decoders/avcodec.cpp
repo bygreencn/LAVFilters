@@ -44,45 +44,6 @@ ILAVDecoder *CreateDecoderAVCodec() {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// Multi-threaded decoding configuration
-////////////////////////////////////////////////////////////////////////////////
-static struct {
-  AVCodecID codecId;
-  int     threadFlags;
-} ff_thread_codecs[] = {
-  { AV_CODEC_ID_H264,       FF_THREAD_FRAME|FF_THREAD_SLICE },
-  { AV_CODEC_ID_HEVC,       FF_THREAD_FRAME                 },
-  { AV_CODEC_ID_MPEG1VIDEO,                 FF_THREAD_SLICE },
-  { AV_CODEC_ID_MPEG2VIDEO,                 FF_THREAD_SLICE },
-  { AV_CODEC_ID_DVVIDEO,                    FF_THREAD_SLICE },
-  { AV_CODEC_ID_VP8,        FF_THREAD_FRAME                 },
-  { AV_CODEC_ID_VP3,        FF_THREAD_FRAME                 },
-  { AV_CODEC_ID_THEORA,     FF_THREAD_FRAME                 },
-  { AV_CODEC_ID_HUFFYUV,    FF_THREAD_FRAME                 },
-  { AV_CODEC_ID_FFVHUFF,    FF_THREAD_FRAME                 },
-  //{ AV_CODEC_ID_MPEG4,      FF_THREAD_FRAME                 },
-  { AV_CODEC_ID_PRORES,                     FF_THREAD_SLICE },
-  { AV_CODEC_ID_UTVIDEO,    FF_THREAD_FRAME                 },
-  { AV_CODEC_ID_RV30,       FF_THREAD_FRAME                 },
-  { AV_CODEC_ID_RV40,       FF_THREAD_FRAME                 },
-  { AV_CODEC_ID_DNXHD,      FF_THREAD_FRAME                 },
-  { AV_CODEC_ID_FFV1,                       FF_THREAD_SLICE },
-  { AV_CODEC_ID_LAGARITH,   FF_THREAD_FRAME                 },
-  { AV_CODEC_ID_FRAPS,      FF_THREAD_FRAME                 },
-  { AV_CODEC_ID_JPEG2000,   FF_THREAD_FRAME                 },
-};
-
-int getThreadFlags(AVCodecID codecId)
-{
-  for(int i = 0; i < countof(ff_thread_codecs); ++i) {
-    if (ff_thread_codecs[i].codecId == codecId) {
-      return ff_thread_codecs[i].threadFlags;
-    }
-  }
-  return 0;
-}
-
-////////////////////////////////////////////////////////////////////////////////
 // Create DXVA2 Extended Flags from a AVFrame and AVCodecContext
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -405,21 +366,14 @@ STDMETHODIMP CDecAvcodec::InitDecoder(AVCodecID codec, const CMediaType *pmt)
   m_pAVCtx->refcounted_frames     = 1;
 
   // Setup threading
-  int thread_type = getThreadFlags(codec);
-  if (thread_type) {
-    // Thread Count. 0 = auto detect
-    int thread_count = m_pSettings->GetNumThreads();
-    if (thread_count == 0) {
-      thread_count = av_cpu_count() * 3 / 2;
-    }
-
-    m_pAVCtx->thread_count = max(1, min(thread_count, AVCODEC_MAX_THREADS));
-    m_pAVCtx->thread_type = thread_type;
-  } else {
-    m_pAVCtx->thread_count = 1;
+  // Thread Count. 0 = auto detect
+  int thread_count = m_pSettings->GetNumThreads();
+  if (thread_count == 0) {
+    thread_count = av_cpu_count() * 3 / 2;
   }
+  m_pAVCtx->thread_count = max(1, min(thread_count, AVCODEC_MAX_THREADS));
 
-  if (dwDecFlags & LAV_VIDEO_DEC_FLAG_NO_MT) {
+  if (dwDecFlags & LAV_VIDEO_DEC_FLAG_NO_MT || codec == AV_CODEC_ID_MPEG4) {
     m_pAVCtx->thread_count = 1;
   }
 
@@ -516,25 +470,17 @@ STDMETHODIMP CDecAvcodec::InitDecoder(AVCodecID codec, const CMediaType *pmt)
   // Setup codec-specific timing logic
   BOOL bVC1IsPTS = (codec == AV_CODEC_ID_VC1 && !(dwDecFlags & LAV_VIDEO_DEC_FLAG_ONLY_DTS));
 
+  if (codec == AV_CODEC_ID_MPEG4 && pmt->formattype != FORMAT_MPEG2Video)
+    dwDecFlags |= LAV_VIDEO_DEC_FLAG_ONLY_DTS;
+
   // Use ffmpegs logic to reorder timestamps
   // This is required for H264 content (except AVI), and generally all codecs that use frame threading
-  // VC-1 is also a special case. Its required for splitters that deliver PTS timestamps (see bVC1IsPTS above)
   m_bFFReordering        = !(dwDecFlags & LAV_VIDEO_DEC_FLAG_ONLY_DTS) && (
-                              codec == AV_CODEC_ID_H264
-                           || codec == AV_CODEC_ID_HEVC
-                           || codec == AV_CODEC_ID_VP8
-                           || codec == AV_CODEC_ID_VP3
-                           || codec == AV_CODEC_ID_THEORA
-                           || codec == AV_CODEC_ID_HUFFYUV
-                           || codec == AV_CODEC_ID_FFVHUFF
+                            (m_pAVCodec->capabilities & CODEC_CAP_FRAME_THREADS) // Covers most modern codecs, others listed above
                            || codec == AV_CODEC_ID_MPEG2VIDEO
                            || codec == AV_CODEC_ID_MPEG1VIDEO
                            || codec == AV_CODEC_ID_DIRAC
-                           || codec == AV_CODEC_ID_UTVIDEO
-                           || codec == AV_CODEC_ID_DNXHD
-                           || codec == AV_CODEC_ID_JPEG2000
                            || codec == AV_CODEC_ID_VC1
-                           || (codec == AV_CODEC_ID_MPEG4 && pmt->formattype == FORMAT_MPEG2Video)
                           );
 
   // Stop time is unreliable, drop it and calculate it
@@ -558,10 +504,6 @@ STDMETHODIMP CDecAvcodec::InitDecoder(AVCodecID codec, const CMediaType *pmt)
                         || codec == AV_CODEC_ID_VP3
                         || codec == AV_CODEC_ID_THEORA
                         || codec == AV_CODEC_ID_MPEG4;
-
-  m_bNoBufferConsumption =    codec == AV_CODEC_ID_MJPEGB
-                           || codec == AV_CODEC_ID_LOCO
-                           || codec == AV_CODEC_ID_JPEG2000;
 
   m_bHasPalette = m_pAVCtx->bits_per_coded_sample <= 8 && m_pAVCtx->extradata_size && !(dwDecFlags & LAV_VIDEO_DEC_FLAG_LAVSPLITTER)
                   &&  (codec == AV_CODEC_ID_MSVIDEO1
@@ -689,7 +631,6 @@ STDMETHODIMP CDecAvcodec::Decode(const BYTE *buffer, int buflen, REFERENCE_TIME 
 
   int     got_picture = 0;
   int     used_bytes  = 0;
-  BOOL    bParserFrame = FALSE;
   BOOL    bFlush = (buffer == NULL);
   BOOL    bEndOfSequence = FALSE;
 
@@ -778,6 +719,9 @@ STDMETHODIMP CDecAvcodec::Decode(const BYTE *buffer, int buflen, REFERENCE_TIME 
       if (used_bytes == 0 && pOut_size == 0 && !bFlush) {
         DbgLog((LOG_TRACE, 50, L"::Decode() - could not process buffer, starving?"));
         break;
+      } else if (used_bytes > 0) {
+        buflen -= used_bytes;
+        pDataBuffer += used_bytes;
       }
 
       // Update start time cache
@@ -798,8 +742,6 @@ STDMETHODIMP CDecAvcodec::Decode(const BYTE *buffer, int buflen, REFERENCE_TIME 
         // The value was used once, don't use it for multiple frames, that ends up in weird timings
         rtStartIn = AV_NOPTS_VALUE;
       }
-
-       bParserFrame = (pOut_size > 0);
 
       if (pOut_size > 0 || bFlush) {
 
@@ -839,6 +781,7 @@ STDMETHODIMP CDecAvcodec::Decode(const BYTE *buffer, int buflen, REFERENCE_TIME 
       }
     } else {
       used_bytes = avcodec_decode_video2 (m_pAVCtx, m_pFrame, &got_picture, &avpkt);
+      buflen = 0;
     }
 
     if (FAILED(PostDecode())) {
@@ -850,16 +793,6 @@ STDMETHODIMP CDecAvcodec::Decode(const BYTE *buffer, int buflen, REFERENCE_TIME 
     if (used_bytes < 0) {
       av_frame_unref(m_pFrame);
       return S_OK;
-    }
-
-    // When Frame Threading, we won't know how much data has been consumed, so it by default eats everything.
-    // In addition, if no data got consumed, and no picture was extracted, the frame probably isn't all that useufl.
-    // The MJPEB decoder is somewhat buggy and doesn't let us know how much data was consumed really...
-    if ((!m_pParser && (m_pAVCtx->active_thread_type & FF_THREAD_FRAME || (!got_picture && used_bytes == 0))) || m_bNoBufferConsumption || bFlush) {
-      buflen = 0;
-    } else {
-      buflen -= used_bytes;
-      pDataBuffer += used_bytes;
     }
 
     // Judge frame usability
