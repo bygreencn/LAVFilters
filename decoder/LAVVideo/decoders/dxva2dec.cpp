@@ -698,9 +698,6 @@ HRESULT CDecDXVA2::CheckHWCompatConditions(GUID decoderGuid)
     if (decoderGuid == DXVADDI_Intel_ModeH264_E && m_pAVCtx->codec_id == AV_CODEC_ID_H264 && m_pAVCtx->refs > max_ref_frames_dpb41) {
       DbgLog((LOG_TRACE, 10, L"-> Too many reference frames for Intel H.264 decoder implementation"));
       return E_FAIL;
-    } else if (m_pAVCtx->codec_id == AV_CODEC_ID_VC1 || m_pAVCtx->codec_id == AV_CODEC_ID_WMV3) {
-      DbgLog((LOG_TRACE, 10, L"-> Intels VC-1/WMV3 implementation is still incomplete"));
-      return E_FAIL;
     }
   }
   return S_OK;
@@ -827,6 +824,25 @@ STDMETHODIMP CDecDXVA2::InitDecoder(AVCodecID codec, const CMediaType *pmt)
   HRESULT hr = S_OK;
   DbgLog((LOG_TRACE, 10, L"CDecDXVA2::InitDecoder(): Initializing DXVA2 decoder"));
 
+  // Hack-ish check to avoid re-creating the full decoder when only the aspect ratio changes.
+  // Re-creating the DXVA2 decoder can lead to issues like missing frames or a several second delay
+  if (m_pDecoder) {
+    CMediaType mediaTypeCheck = m_MediaType;
+    if (mediaTypeCheck.formattype == FORMAT_VideoInfo2 && pmt->formattype == FORMAT_VideoInfo2) {
+      VIDEOINFOHEADER2 *vih2Old = (VIDEOINFOHEADER2 *)mediaTypeCheck.Format();
+      VIDEOINFOHEADER2 *vih2New = (VIDEOINFOHEADER2 *)pmt->Format();
+
+      vih2Old->dwPictAspectRatioX = vih2New->dwPictAspectRatioX;
+      vih2Old->dwPictAspectRatioY = vih2New->dwPictAspectRatioY;
+
+      if (mediaTypeCheck == *pmt) {
+        DbgLog((LOG_TRACE, 10, L"-> Skipping re-init because media type is unchanged."));
+        m_MediaType = *pmt;
+        return S_OK;
+      }
+    }
+  }
+
   DestroyDecoder(false);
 
   m_DisplayDelay = DXVA2_QUEUE_SURFACES;
@@ -867,6 +883,8 @@ STDMETHODIMP CDecDXVA2::InitDecoder(AVCodecID codec, const CMediaType *pmt)
   if (FAILED(CheckHWCompatConditions(input))) {
     return E_FAIL;
   }
+
+  m_MediaType = *pmt;
 
   return S_OK;
 }
